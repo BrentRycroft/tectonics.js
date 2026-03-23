@@ -424,6 +424,97 @@ function Lithosphere(grid, parameters) {
             this.plates.push(plate);
         }
     };
+    this.ensurePlates = function() {
+        if (this.plates.length === 0) {
+            this.resetPlates();
+        }
+        if (this.plates.length === 0) {
+            const mask = Uint8Raster(grid);
+            Uint8Raster.fill(mask, 1);
+            const plate = new Plate(
+                grid,
+                {
+                    mask: mask.buffer,
+                    crust: this.total_crust.buffer.slice(0),
+                }
+            );
+            plate.setDependencies({
+                material_density: material_density,
+                material_viscosity: material_viscosity,
+                surface_gravity: surface_gravity,
+            });
+            this.plates.push(plate);
+        }
+        return this.plates;
+    };
+    this.createPlate = function() {
+        const mask = Uint8Raster(grid);
+        Uint8Raster.fill(mask, 0);
+        const plate = new Plate(
+            grid,
+            {
+                mask: mask.buffer,
+                crust: new Crust({ grid: grid }).buffer,
+            }
+        );
+        plate.setDependencies({
+            material_density: material_density,
+            material_viscosity: material_viscosity,
+            surface_gravity: surface_gravity,
+        });
+        this.plates.push(plate);
+        return this.plates.length - 1;
+    };
+    this.refreshPlateMaps = function() {
+        if (this.plates.length === 0) {
+            Crust.copy(this.total_crust, this.top_crust);
+            Uint8Raster.fill(this.top_plate_map, 255);
+            Uint8Raster.fill(this.plate_count, 0);
+            this.invalidate();
+            return;
+        }
+        for (let i = 0, li = this.plates.length; i < li; ++i) {
+            this.plates[i].setDependencies({
+                material_density: material_density,
+                material_viscosity: material_viscosity,
+                surface_gravity: surface_gravity,
+            });
+            this.plates[i].move(0);
+        }
+        merge_plates_to_master(this.plates, this);
+        this.invalidate();
+    };
+    this.paintPlateFromSelection = function(target_plate_id, selection) {
+        this.ensurePlates();
+
+        while (target_plate_id >= this.plates.length) {
+            this.createPlate();
+        }
+
+        const target_plate = this.plates[target_plate_id];
+
+        Crust.copy_into_selection(target_plate.crust, this.total_crust, selection, target_plate.crust);
+        Uint8RasterGraphics.fill_into_selection(target_plate.mask, 1, selection, target_plate.mask);
+
+        for (let i = 0, li = this.plates.length; i < li; ++i) {
+            if (this.plates[i] !== target_plate) {
+                Uint8RasterGraphics.fill_into_selection(this.plates[i].mask, 0, selection, this.plates[i].mask);
+            }
+        }
+
+        this.plates = this.plates.filter(plate => Uint8Dataset.sum(plate.mask) > 0);
+        this.refreshPlateMaps();
+
+        return this.plates.indexOf(target_plate);
+    };
+    this.paintPlateFromIds = function(target_plate_id, cell_ids) {
+        const selection = Uint8Raster(grid);
+        Uint8Raster.fill(selection, 0);
+        for (let i = 0, li = cell_ids.length; i < li; ++i) {
+            selection[cell_ids[i]] = 1;
+        }
+        return this.paintPlateFromSelection(target_plate_id, selection);
+    };
 
     function assert_dependencies() {
         if (sealevel === void 0)             { throw '"sealevel" not provided'; }

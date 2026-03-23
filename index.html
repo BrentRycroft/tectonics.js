@@ -314,6 +314,52 @@
                 </button>
             </div>
         </div>
+        <div id="plate-editor" class="vertical-axis-group plate-editor">
+            <div class="horizontal-axis-group">
+                <button type="button"
+                    class="btn"
+                    v-bind:class="{'btn-secondary': enabled}"
+                    v-on:click="toggleEnabled">
+                    <img src="icons/puzzle.svg"/>
+                    Edit Plates
+                </button>
+                <button type="button" class="btn" v-on:click="generatePlates">
+                    <img src="icons/react.svg"/>
+                    Generate Plates
+                </button>
+            </div>
+            <div class="horizontal-axis-group">
+                <button type="button" class="btn" v-on:click="addPlate">
+                    <img src="icons/add.svg"/>
+                    Add Plate
+                </button>
+                <button type="button" class="btn" v-on:click="selectPreviousPlate" v-bind:disabled="plateCount === 0">
+                    &lt;
+                </button>
+                <span class="form-control plate-editor-status">
+                    Plate {{ displayedSelectedPlate }}
+                </span>
+                <button type="button" class="btn" v-on:click="selectNextPlate" v-bind:disabled="plateCount === 0">
+                    &gt;
+                </button>
+            </div>
+            <div class="horizontal-axis-group">
+                <div class="btn plate-editor-label">
+                    <img src="icons/blur.svg"/>
+                    Brush {{ brushRadius }}
+                </div>
+                <input type="range" v-model="brushRadius" class="plate-editor-slider"
+                    min="0" max="6" step="1">
+            </div>
+            <div class="plate-editor-help" v-if="enabled">
+                <div v-if="!isGlobeProjection">
+                    Switch to Globe view before painting plate boundaries.
+                </div>
+                <div v-else>
+                    Left-drag paints the selected plate. Alt-click samples the plate under the cursor.
+                </div>
+            </div>
+        </div>
         <div class="long-axis-group slider-label label">
             <div class="btn">
                 <!-- <img src="icons/spinner-small.gif"/> -->
@@ -755,6 +801,64 @@
         hidden_downloader_tag.setAttribute('href', url);
         hidden_downloader_tag.setAttribute('download', filename);
         hidden_downloader_tag.click();
+    }
+    function getCellIdFromMouseEvent(event) {
+        if (view === void 0 || sim === void 0 || sim.focus() === void 0) {
+            return;
+        }
+        if (scalarViewVue !== void 0 && scalarViewVue.projectionSelected !== 'orthographic') {
+            return;
+        }
+
+        const dom_element = view.getDomElement();
+        const rect = dom_element.getBoundingClientRect();
+        const mouse = new THREE.Vector2(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1
+        );
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(mouse, view.gl_state.camera);
+
+        const point = new THREE.Vector3();
+        const intersection = raycaster.ray.intersectSphere(new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1), point);
+        if (intersection === null) {
+            return;
+        }
+
+        return sim.focus().grid.getNearestId({
+            x: point.x,
+            y: point.y,
+            z: point.z,
+        });
+    }
+    function getBrushCellIds(grid, center_id, radius) {
+        const frontier = [center_id];
+        const visited = {};
+        const results = [];
+        let depth = 0;
+
+        visited[center_id] = true;
+
+        while (frontier.length > 0 && depth <= radius) {
+            const next_frontier = [];
+            for (let i = 0, li = frontier.length; i < li; ++i) {
+                const cell_id = frontier[i];
+                results.push(cell_id);
+                const neighbors = grid.getNeighborIds(cell_id);
+                for (let j = 0, lj = neighbors.length; j < lj; ++j) {
+                    const neighbor_id = neighbors[j];
+                    if (visited[neighbor_id] !== true) {
+                        visited[neighbor_id] = true;
+                        next_frontier.push(neighbor_id);
+                    }
+                }
+            }
+            frontier.splice(0, frontier.length);
+            Array.prototype.push.apply(frontier, next_frontier);
+            depth++;
+        }
+
+        return results;
     }
 
 
@@ -1254,6 +1358,103 @@
         }
       }
     });
+    const plateEditorVue = new Vue({
+      el: '#plate-editor',
+      data: {
+        enabled: false,
+        brushRadius: 1,
+        selectedPlateId: 0,
+        plateCount: 0,
+        pendingNewPlate: false,
+      },
+      created: function() {
+          const _this = this;
+          onSimLoadStop.subscribe(function() {
+              _this.syncFromSimulation();
+          });
+      },
+      computed: {
+          displayedSelectedPlate: function() {
+              if (this.plateCount === 0) {
+                  return '0 / 0';
+              }
+              return `${this.selectedPlateId + 1} / ${this.plateCount}`;
+          },
+          isGlobeProjection: function() {
+              return scalarViewVue !== void 0 && scalarViewVue.projectionSelected === 'orthographic';
+          }
+      },
+      methods: {
+          syncFromSimulation: function() {
+              if (sim === void 0 || sim.focus() === void 0) {
+                  this.plateCount = 0;
+                  this.selectedPlateId = 0;
+                  this.pendingNewPlate = false;
+                  return;
+              }
+
+              this.plateCount = sim.focus().lithosphere.plates.length + (this.pendingNewPlate ? 1 : 0);
+              if (this.plateCount === 0) {
+                  this.selectedPlateId = 0;
+                  return;
+              }
+              this.selectedPlateId = Math.min(this.selectedPlateId, this.plateCount - 1);
+          },
+          toggleEnabled: function() {
+              this.enabled = !this.enabled;
+              if (this.enabled) {
+                  if (sim.focus().lithosphere.plates.length === 0) {
+                      this.generatePlates();
+                  }
+                  dialogVue.notify('plate editor enabled');
+              } else {
+                  dialogVue.notify('plate editor disabled');
+              }
+          },
+          generatePlates: function() {
+              this.pendingNewPlate = false;
+              sim.focus().lithosphere.resetPlates();
+              sim.focus().lithosphere.refreshPlateMaps();
+              this.syncFromSimulation();
+              dialogVue.notify(`generated ${this.plateCount} tectonic plates`);
+          },
+          addPlate: function() {
+              this.pendingNewPlate = true;
+              this.selectedPlateId = sim.focus().lithosphere.plates.length;
+              this.plateCount = sim.focus().lithosphere.plates.length + 1;
+              dialogVue.notify(`added plate ${this.selectedPlateId + 1}`);
+          },
+          selectPreviousPlate: function() {
+              if (this.plateCount === 0) {
+                  return;
+              }
+              this.selectedPlateId = (this.selectedPlateId + this.plateCount - 1) % this.plateCount;
+          },
+          selectNextPlate: function() {
+              if (this.plateCount === 0) {
+                  return;
+              }
+              this.selectedPlateId = (this.selectedPlateId + 1) % this.plateCount;
+          },
+          samplePlateAtCell: function(cell_id) {
+              const plate_id = sim.focus().lithosphere.top_plate_map[cell_id];
+              if (plate_id === 255) {
+                  return;
+              }
+              this.pendingNewPlate = false;
+              this.selectedPlateId = plate_id;
+              this.syncFromSimulation();
+              dialogVue.notify(`selected plate ${this.selectedPlateId + 1}`);
+          },
+          paintPlateAtCell: function(cell_id) {
+              const world = sim.focus();
+              const cell_ids = getBrushCellIds(world.grid, cell_id, parseInt(this.brushRadius));
+              this.selectedPlateId = world.lithosphere.paintPlateFromIds(this.selectedPlateId, cell_ids);
+              this.pendingNewPlate = false;
+              this.syncFromSimulation();
+          }
+      }
+    });
 
     Vue.use(VueCharts);
     const chartVue = new Vue({
@@ -1309,6 +1510,50 @@
     animate();
     update();
     autosave();
+
+    let isPaintingPlateBoundary = false;
+    view.getDomElement().addEventListener('mousedown', function(event) {
+        if (plateEditorVue.enabled !== true || event.button !== 0) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!plateEditorVue.isGlobeProjection) {
+            dialogVue.notify('switch to Globe view to edit plate boundaries');
+            return;
+        }
+
+        const cell_id = getCellIdFromMouseEvent(event);
+        if (cell_id === void 0) {
+            return;
+        }
+        if (event.altKey) {
+            plateEditorVue.samplePlateAtCell(cell_id);
+            return;
+        }
+
+        isPaintingPlateBoundary = true;
+        view.gl_state.controls.enabled = false;
+        plateEditorVue.paintPlateAtCell(cell_id);
+    }, true);
+    window.addEventListener('mousemove', function(event) {
+        if (isPaintingPlateBoundary !== true) {
+            return;
+        }
+        const cell_id = getCellIdFromMouseEvent(event);
+        if (cell_id === void 0) {
+            return;
+        }
+        plateEditorVue.paintPlateAtCell(cell_id);
+    });
+    window.addEventListener('mouseup', function() {
+        if (isPaintingPlateBoundary !== true) {
+            return;
+        }
+        isPaintingPlateBoundary = false;
+        view.gl_state.controls.enabled = true;
+    });
 
     // HACK: not sure why, but initializing speed at 1m/s will cause 
     //  display to break when user increases speed past 1wk/s.
