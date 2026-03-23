@@ -208,6 +208,36 @@ where we know the content is short enough not to require considering screen orie
     justify-content: space-evenly;
 }
 
+.plate-editor {
+    gap: 0.25rem;
+    max-width: 22rem;
+}
+
+.plate-editor-status {
+    min-width: 7rem;
+    text-align: center;
+}
+
+.plate-editor-slider {
+    flex: 1 1 auto;
+    align-self: center;
+    margin: 0 0.5rem;
+}
+
+.plate-editor-label {
+    flex: 0 0 auto;
+}
+
+.plate-editor-help {
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 0.25rem;
+    color: #fff;
+    font-size: 0.8rem;
+    max-width: 22rem;
+}
+
 /*
 ".short-axis-group" behaves similarly to bootstrap's .btn-group,
  however it switches between vertical and horizontal axes dependant on screen orientation.
@@ -720,4 +750,3 @@ It  has no styling and is never meant to be seen.
     text-align  : center;
     border-style: dashed;
 }
-
